@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Timers;
 using System.Windows.Media;
 using GameReaderCommon;
@@ -20,6 +21,7 @@ namespace GX100Plugin
         private Timer _reconnectTimer = null!;
         private Timer? _saveDebounceTimer;
         private PluginManager _pluginManager = null!;
+        private int _reconnectBusy;
 
         public PluginManager PluginManager { set => _pluginManager = value; }
         public ImageSource? PictureIcon => null;
@@ -52,8 +54,18 @@ namespace GX100Plugin
             _reconnectTimer = new Timer(5000);
             _reconnectTimer.Elapsed += (s, e) =>
             {
-                if (!_connection.IsConnected)
-                    TryConnect();
+                // Elapsed fires on a pool thread whether or not the previous tick
+                // finished, so a slow Connect() would let ticks stack up.
+                if (Interlocked.Exchange(ref _reconnectBusy, 1) == 1) return;
+                try
+                {
+                    if (!_connection.IsConnected)
+                        TryConnect();
+                }
+                finally
+                {
+                    Volatile.Write(ref _reconnectBusy, 0);
+                }
             };
             _reconnectTimer.AutoReset = true;
             if (_settings.ConnectionEnabled)
@@ -149,7 +161,7 @@ namespace GX100Plugin
         {
             if (!_connection.IsConnected) return;
 
-            _connection.SendConfiguration(
+            bool sent = _connection.SendConfiguration(
                 _data.ComboSwitch1,
                 _data.ComboSwitch2,
                 _data.SequentialMode,
@@ -157,10 +169,16 @@ namespace GX100Plugin
                 _data.SeqSensitivity,
                 _data.PullButton
             );
-            SimHub.Logging.Current.Info(
-                $"[GX100] Config sent: H={_data.HSensitivity} Seq={_data.SeqSensitivity} " +
+
+            string detail =
+                $"H={_data.HSensitivity} Seq={_data.SeqSensitivity} " +
                 $"Mode={(_data.SequentialMode ? "SEQ" : "H")} CB1={_data.ComboSwitch1} " +
-                $"CB2={_data.ComboSwitch2} Pull={_data.PullButton}");
+                $"CB2={_data.ComboSwitch2} Pull={_data.PullButton}";
+
+            if (sent)
+                SimHub.Logging.Current.Info($"[GX100] Config sent: {detail}");
+            else
+                SimHub.Logging.Current.Error($"[GX100] Config send FAILED: {detail}");
         }
 
         // --- Calibration ---
@@ -169,22 +187,37 @@ namespace GX100Plugin
         {
             if (!_connection.IsConnected) return;
 
-            _data.IsHCalibrating = !_data.IsHCalibrating;
-            _connection.SendCalibration(_data.IsHCalibrating
-                ? GX100Protocol.CalHPatternStart
-                : GX100Protocol.CalHPatternFinish);
-            SimHub.Logging.Current.Info($"[GX100] H-pattern calibration: {(_data.IsHCalibrating ? "started" : "finished")}");
+            // Only advance the UI state once the device has actually been told, so
+            // a failed write can't leave the button showing a calibration mode the
+            // device isn't in.
+            bool starting = !_data.IsHCalibrating;
+            if (!_connection.SendCalibration(starting
+                    ? GX100Protocol.CalHPatternStart
+                    : GX100Protocol.CalHPatternFinish))
+            {
+                SimHub.Logging.Current.Error("[GX100] H-pattern calibration command failed — state unchanged");
+                return;
+            }
+
+            _data.IsHCalibrating = starting;
+            SimHub.Logging.Current.Info($"[GX100] H-pattern calibration: {(starting ? "started" : "finished")}");
         }
 
         internal void ToggleSeqCalibration()
         {
             if (!_connection.IsConnected) return;
 
-            _data.IsSeqCalibrating = !_data.IsSeqCalibrating;
-            _connection.SendCalibration(_data.IsSeqCalibrating
-                ? GX100Protocol.CalSequentialStart
-                : GX100Protocol.CalSequentialFinish);
-            SimHub.Logging.Current.Info($"[GX100] Sequential calibration: {(_data.IsSeqCalibrating ? "started" : "finished")}");
+            bool starting = !_data.IsSeqCalibrating;
+            if (!_connection.SendCalibration(starting
+                    ? GX100Protocol.CalSequentialStart
+                    : GX100Protocol.CalSequentialFinish))
+            {
+                SimHub.Logging.Current.Error("[GX100] Sequential calibration command failed — state unchanged");
+                return;
+            }
+
+            _data.IsSeqCalibrating = starting;
+            SimHub.Logging.Current.Info($"[GX100] Sequential calibration: {(starting ? "started" : "finished")}");
         }
 
         // --- Settings persistence ---

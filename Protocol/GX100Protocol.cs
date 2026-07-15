@@ -4,7 +4,16 @@ namespace GX100Plugin.Protocol
     {
         public const int VendorId = 0x04B0;   // Nidec Copal Electronics
         public const int ProductId = 0x5750;
-        public const int ReportLength = 64;
+
+        // The device declares no Report IDs, so reports are unnumbered and carry
+        // no leading ID byte in either direction.
+        public const int OutputReportLength = 64;
+
+        // 2 button bytes + 12 bytes of Hall-sensor ADC data + 2 unused. The sensor
+        // bytes change constantly, so the device streams a report roughly every
+        // 56ms whether or not anything was touched. hidraw hands back exactly one
+        // report per read, so a read asks for exactly one report's worth.
+        public const int InputReportLength = 16;
 
         // Report type bytes (first byte of output report)
         public const byte ReportCalibration = 0x01;
@@ -26,8 +35,13 @@ namespace GX100Plugin.Protocol
         // byte 7 = 0x00 padding
         public const int ConfigPullButton = 8;
 
-        // Input report button bit positions (2-byte button field)
-        // Buttons 1-8: gears, 9-10: seq up/down, 11: reverse, 12-16: extra
+        // Input report button bit positions (2-byte button field).
+        // Buttons 1-8: gears, 9-10: seq down/up, 11: reverse, 12-16: extra.
+        //
+        // Bit 8 is the lever pushed away, bit 9 the lever pulled back — confirmed
+        // on hardware, where bit 8 only ever co-occurs with the forward gear row
+        // (1/3/5) and bit 9 only with the back row (2/4). A sequential gearbox
+        // upshifts on pull and downshifts on push, so bit 9 is Up, not bit 8.
         public const int ButtonGear1 = 0;
         public const int ButtonGear2 = 1;
         public const int ButtonGear3 = 2;
@@ -36,8 +50,8 @@ namespace GX100Plugin.Protocol
         public const int ButtonGear6 = 5;
         public const int ButtonGear7 = 6;
         public const int ButtonGear8 = 7;
-        public const int ButtonSeqUp = 8;
-        public const int ButtonSeqDown = 9;
+        public const int ButtonSeqDown = 8;
+        public const int ButtonSeqUp = 9;
         public const int ButtonReverse = 10;
         public const int ButtonExtra1 = 11;
         public const int ButtonExtra2 = 12;

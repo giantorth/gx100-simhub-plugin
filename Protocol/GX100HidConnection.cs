@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using HidSharp;
@@ -8,18 +7,41 @@ using Microsoft.Win32.SafeHandles;
 
 namespace GX100Plugin.Protocol
 {
+    /// <summary>
+    /// I/O for the GX-100 shifter.
+    ///
+    /// Under Wine the device is driven through /dev/hidrawN directly rather than
+    /// through HidSharp. Wine's HID stack misreports this device: it advertises a
+    /// 9-byte output report where the descriptor declares 64, so a config report
+    /// cannot be written through HidSharp there at all. HidSharp is kept only as a
+    /// write fallback for native Windows, which has no hidraw; button input
+    /// requires hidraw.
+    /// </summary>
     public class GX100HidConnection : IDisposable
     {
-        private HidDevice? _device;
-        private HidStream? _stream;
+        /// <summary>
+        /// One connection generation. Each reader thread owns the session it was
+        /// started for and never touches <see cref="_session"/> directly, so a
+        /// reader left over from a previous generation cannot close the handles or
+        /// raise the disconnect event of the live one.
+        /// </summary>
+        private sealed class Session
+        {
+            public string? HidrawPath;          // path form CreateFile accepted, e.g. @"Z:\dev\hidraw6"
+            public SafeFileHandle? ReadHandle;  // owned by the reader thread
+            public HidStream? Stream;           // native-Windows write fallback
+            public Thread? Reader;
+            public volatile bool Stop;
+        }
+
+        private readonly object _sync = new object();
+        private Session? _session;
         private volatile bool _disposed;
 
-        private string? _hidrawPath;
-        private SafeFileHandle? _hidrawHandle;
-        private Thread? _readThread;
-        private volatile bool _stopReading;
-
-        public bool IsConnected => _stream != null;
+        public bool IsConnected
+        {
+            get { var s = _session; return s != null && !s.Stop; }
+        }
 
         public event Action<ushort>? ButtonStateChanged;
         public event Action? DeviceDisconnected;
@@ -40,196 +62,190 @@ namespace GX100Plugin.Protocol
             SafeFileHandle hFile, byte[] lpBuffer, uint nNumberOfBytesToRead,
             out uint lpNumberOfBytesRead, IntPtr lpOverlapped);
 
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool CancelIoEx(SafeFileHandle hFile, IntPtr lpOverlapped);
-
         private const uint GENERIC_READ = 0x80000000;
         private const uint GENERIC_WRITE = 0x40000000;
         private const uint FILE_SHARE_READ = 0x00000001;
         private const uint FILE_SHARE_WRITE = 0x00000002;
         private const uint OPEN_EXISTING = 3;
 
-        public GX100HidConnection()
-        {
-            DeviceList.Local.Changed += OnDeviceListChanged;
-        }
+        // --- Connect / disconnect ---
 
         public bool Connect()
         {
-            if (_stream != null) return true;
-
-            try
+            lock (_sync)
             {
-                _device = FindDevice();
-                if (_device == null) return false;
+                if (_disposed) return false;
 
-                int maxIn = _device.GetMaxInputReportLength();
-                int maxOut = _device.GetMaxOutputReportLength();
-                _stream = _device.Open();
-                _stream.ReadTimeout = Timeout.Infinite;
-                SimHub.Logging.Current.Info(
-                    $"[GX100] HidSharp connected (maxOut={maxOut} maxIn={maxIn})");
+                var current = _session;
+                if (current != null && !current.Stop) return true;
 
-                OpenHidraw();
-                StartDirectReader();
-                return true;
-            }
-            catch (Exception ex)
-            {
-                SimHub.Logging.Current.Error($"[GX100] Connect error: {ex.Message}");
-                CleanupStreams();
-                return false;
-            }
-        }
-
-        private void OpenHidraw()
-        {
-            _hidrawPath = FindHidrawPath();
-            if (_hidrawPath == null)
-            {
-                SimHub.Logging.Current.Warn("[GX100] No hidraw found — output via HidSharp (may fail under Wine)");
-                return;
-            }
-
-            string winePath = @"Z:" + _hidrawPath.Replace('/', '\\');
-            _hidrawHandle = CreateFile(winePath, GENERIC_READ | GENERIC_WRITE,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
-
-            if (_hidrawHandle.IsInvalid)
-            {
-                int err = Marshal.GetLastWin32Error();
-                SimHub.Logging.Current.Error($"[GX100] CreateFile({winePath}) failed: error {err}");
-                _hidrawHandle = null;
-
+                var s = new Session();
                 try
                 {
-                    _hidrawHandle = CreateFile(_hidrawPath, GENERIC_READ | GENERIC_WRITE,
-                        FILE_SHARE_READ | FILE_SHARE_WRITE,
-                        IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
-
-                    if (_hidrawHandle.IsInvalid)
+                    string? unixPath = FindHidrawPath();
+                    if (unixPath != null)
                     {
-                        _hidrawHandle = null;
-                        SimHub.Logging.Current.Error("[GX100] Direct open also failed");
-                    }
-                    else
-                    {
-                        SimHub.Logging.Current.Info($"[GX100] Hidraw opened directly: {_hidrawPath}");
-                    }
-                }
-                catch (Exception ex2)
-                {
-                    SimHub.Logging.Current.Error($"[GX100] Direct open exception: {ex2.Message}");
-                    _hidrawHandle = null;
-                }
-            }
-            else
-            {
-                SimHub.Logging.Current.Info($"[GX100] Hidraw opened via Wine Z: drive: {winePath}");
-            }
-        }
+                        s.ReadHandle = TryOpenHidraw(unixPath, GENERIC_READ, out string? opened);
+                        if (s.ReadHandle == null) return false;
 
-        private void StartDirectReader()
-        {
-            if (_hidrawHandle == null || _hidrawHandle.IsInvalid)
-            {
-                SimHub.Logging.Current.Warn("[GX100] No hidraw handle — cannot start direct reader");
-                return;
-            }
+                        s.HidrawPath = opened;
+                        SimHub.Logging.Current.Info($"[GX100] Connected via hidraw: {opened}");
 
-            _stopReading = false;
-            _readThread = new Thread(ReadLoop)
-            {
-                IsBackground = true,
-                Name = "GX100-HidrawReader"
-            };
-            _readThread.Start();
-        }
-
-        private void ReadLoop()
-        {
-            // hidraw input: 16 buttons = 2 bytes + 14 padding = 16 bytes total, no report ID
-            var buffer = new byte[64];
-            SimHub.Logging.Current.Info("[GX100] Direct hidraw reader started");
-
-            while (!_stopReading)
-            {
-                try
-                {
-                    var handle = _hidrawHandle;
-                    if (handle == null || handle.IsInvalid) break;
-
-                    bool ok = ReadFile(handle, buffer, (uint)buffer.Length, out uint bytesRead, IntPtr.Zero);
-                    if (!ok || bytesRead < 2)
-                    {
-                        if (_stopReading) break;
-                        int err = Marshal.GetLastWin32Error();
-                        SimHub.Logging.Current.Error($"[GX100] Hidraw ReadFile failed: error {err}, read={bytesRead}");
-                        break;
+                        _session = s;
+                        StartReader(s);
+                        return true;
                     }
 
-                    ushort buttons = (ushort)(buffer[0] | (buffer[1] << 8));
-                    ButtonStateChanged?.Invoke(buttons);
+                    var device = FindDevice();
+                    if (device == null) return false;
+
+                    s.Stream = device.Open();
+                    SimHub.Logging.Current.Warn(
+                        "[GX100] No hidraw device — config writes via HidSharp, button input unavailable");
+
+                    _session = s;
+                    return true;
                 }
                 catch (Exception ex)
                 {
-                    if (_stopReading) break;
-                    SimHub.Logging.Current.Error($"[GX100] Read exception: {ex.Message}");
-                    break;
+                    SimHub.Logging.Current.Error($"[GX100] Connect failed: {ex.Message}");
+                    CloseSession(s);
+                    return false;
                 }
-            }
-
-            if (!_stopReading)
-            {
-                SimHub.Logging.Current.Info("[GX100] Hidraw reader stopped — device disconnected");
-                HandleDisconnect();
             }
         }
 
         public void Disconnect()
         {
-            StopReader();
-            CleanupStreams();
-        }
-
-        private void StopReader()
-        {
-            _stopReading = true;
-            try
+            Session? s;
+            lock (_sync)
             {
-                var handle = _hidrawHandle;
-                if (handle != null && !handle.IsInvalid)
-                    CancelIoEx(handle, IntPtr.Zero);
+                s = _session;
+                _session = null;
             }
-            catch { }
-            _readThread?.Join(2000);
-            _readThread = null;
+            if (s != null) CloseSession(s);
         }
 
-        private void CleanupStreams()
+        /// <summary>
+        /// Retires a session. Never joins the reader: a read() blocked on a Linux
+        /// character device does not reliably wake when its handle closes, so the
+        /// thread may sit in ReadFile until the device sends its next report.
+        /// Waiting for that would stall whoever called Disconnect — the UI thread
+        /// on a toggle, or SimHub's shutdown path. The thread is a background
+        /// thread and, once superseded, touches no live state, so it is left to
+        /// drain and exit on its own.
+        /// </summary>
+        private static void CloseSession(Session s)
         {
-            if (_hidrawHandle != null && !_hidrawHandle.IsInvalid)
-                _hidrawHandle.Close();
-            _hidrawHandle = null;
-            try { _stream?.Close(); } catch { }
-            _stream = null;
-            _device = null;
+            s.Stop = true;
+            try { s.ReadHandle?.Dispose(); } catch { }
+            try { s.Stream?.Close(); } catch { }
         }
 
-        public void SendCalibration(byte command)
+        // --- Reading ---
+
+        private void StartReader(Session s)
         {
-            var report = new byte[GX100Protocol.ReportLength];
+            s.Reader = new Thread(() => ReadLoop(s))
+            {
+                IsBackground = true,
+                Name = "GX100-HidrawReader",
+            };
+            s.Reader.Start();
+        }
+
+        private void ReadLoop(Session s)
+        {
+            var buffer = new byte[GX100Protocol.InputReportLength];
+            int lastButtons = -1;
+
+            SimHub.Logging.Current.Info("[GX100] hidraw reader started");
+
+            while (!s.Stop)
+            {
+                bool ok;
+                uint bytesRead;
+                try
+                {
+                    ok = ReadFile(s.ReadHandle!, buffer, (uint)buffer.Length, out bytesRead, IntPtr.Zero);
+                }
+                catch (Exception ex)
+                {
+                    if (!s.Stop)
+                        SimHub.Logging.Current.Error($"[GX100] Read exception: {ex.Message}");
+                    break;
+                }
+
+                if (s.Stop) break;
+
+                if (!ok)
+                {
+                    SimHub.Logging.Current.Error(
+                        $"[GX100] hidraw ReadFile failed: error {Marshal.GetLastWin32Error()}");
+                    break;
+                }
+
+                // A runt report is not a disconnect — skip it and keep reading.
+                if (bytesRead < 2) continue;
+
+                int buttons = buffer[0] | (buffer[1] << 8);
+
+                // The device streams continuously because the Hall-sensor bytes
+                // jitter on every report; only the button field is of interest, so
+                // suppress reports that leave it unchanged.
+                if (buttons == lastButtons) continue;
+                lastButtons = buttons;
+
+                try
+                {
+                    ButtonStateChanged?.Invoke((ushort)buttons);
+                }
+                catch (Exception ex)
+                {
+                    SimHub.Logging.Current.Error($"[GX100] Button handler error: {ex.Message}");
+                }
+            }
+
+            HandleReaderExit(s);
+        }
+
+        private void HandleReaderExit(Session s)
+        {
+            bool deliberate = s.Stop;
+
+            bool wasCurrent;
+            lock (_sync)
+            {
+                wasCurrent = ReferenceEquals(_session, s);
+                if (wasCurrent) _session = null;
+            }
+
+            CloseSession(s);
+
+            // Only a live session that stopped on its own is a real disconnect. A
+            // superseded reader waking up late must stay silent, or it would drop
+            // the connection that replaced it and start a reconnect loop.
+            if (deliberate || !wasCurrent || _disposed) return;
+
+            SimHub.Logging.Current.Info("[GX100] Device disconnected");
+            try { DeviceDisconnected?.Invoke(); } catch { }
+        }
+
+        // --- Writing ---
+
+        public bool SendCalibration(byte command)
+        {
+            var report = new byte[GX100Protocol.OutputReportLength];
             report[0] = GX100Protocol.ReportCalibration;
             report[1] = command;
-            WriteReport(report);
+            return WriteReport(report);
         }
 
-        public void SendConfiguration(
+        public bool SendConfiguration(
             bool comboSwitch1, bool comboSwitch2, bool sequentialMode,
             int hSensitivity, int seqSensitivity, bool pullButton)
         {
-            var report = new byte[GX100Protocol.ReportLength];
+            var report = new byte[GX100Protocol.OutputReportLength];
             report[0] = GX100Protocol.ReportConfig;
             report[GX100Protocol.ConfigComboSwitch1] = comboSwitch1 ? (byte)0x01 : (byte)0x00;
             report[GX100Protocol.ConfigComboSwitch2] = comboSwitch2 ? (byte)0x01 : (byte)0x00;
@@ -237,55 +253,115 @@ namespace GX100Plugin.Protocol
             report[GX100Protocol.ConfigHSensitivity] = (byte)(hSensitivity & 0xFF);
             report[GX100Protocol.ConfigSeqSensitivity] = (byte)(seqSensitivity & 0xFF);
             report[GX100Protocol.ConfigPullButton] = pullButton ? (byte)0x01 : (byte)0x00;
-            WriteReport(report);
+            return WriteReport(report);
         }
 
-        private void WriteReport(byte[] report)
+        private bool WriteReport(byte[] report)
         {
-            if (_hidrawHandle != null && !_hidrawHandle.IsInvalid)
-            {
-                try
-                {
-                    bool ok = WriteFile(_hidrawHandle, report, (uint)report.Length, out uint written, IntPtr.Zero);
-                    if (!ok)
-                    {
-                        int err = Marshal.GetLastWin32Error();
-                        SimHub.Logging.Current.Error($"[GX100] Hidraw WriteFile failed: error {err}");
-                    }
-                    return;
-                }
-                catch (Exception ex)
-                {
-                    SimHub.Logging.Current.Error($"[GX100] Hidraw write exception: {ex.Message}");
-                }
-            }
+            var s = _session;
+            if (s == null || s.Stop) return false;
 
-            var stream = _stream;
-            if (stream == null) return;
+            if (s.HidrawPath != null)
+                return WriteHidraw(s.HidrawPath, report);
+
+            var stream = s.Stream;
+            if (stream == null) return false;
             try
             {
                 stream.Write(report);
+                return true;
             }
             catch (Exception ex)
             {
-                SimHub.Logging.Current.Error($"[GX100] HidSharp write error: {ex.Message}");
+                SimHub.Logging.Current.Error($"[GX100] HidSharp write failed: {ex.Message}");
+                return false;
             }
         }
 
-        private void HandleDisconnect()
+        /// <summary>
+        /// Opens a handle per report, mirroring the known-good Linux tool. This
+        /// keeps writes off the read handle, where a synchronous write would
+        /// otherwise contend with a read that blocks until the device's next
+        /// report.
+        /// </summary>
+        private static bool WriteHidraw(string path, byte[] report)
         {
-            CleanupStreams();
-            SimHub.Logging.Current.Info("[GX100] Device disconnected");
-            DeviceDisconnected?.Invoke();
+            SafeFileHandle? h = null;
+            try
+            {
+                h = CreateFile(path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+                if (h.IsInvalid)
+                {
+                    SimHub.Logging.Current.Error(
+                        $"[GX100] Open for write failed ({path}): error {Marshal.GetLastWin32Error()}");
+                    return false;
+                }
+
+                if (!WriteFile(h, report, (uint)report.Length, out uint written, IntPtr.Zero))
+                {
+                    SimHub.Logging.Current.Error(
+                        $"[GX100] WriteFile failed: error {Marshal.GetLastWin32Error()}");
+                    return false;
+                }
+
+                if (written != report.Length)
+                {
+                    SimHub.Logging.Current.Error($"[GX100] Short write: {written}/{report.Length} bytes");
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                SimHub.Logging.Current.Error($"[GX100] Write exception: {ex.Message}");
+                return false;
+            }
+            finally
+            {
+                h?.Dispose();
+            }
         }
 
-        private void OnDeviceListChanged(object? sender, DeviceListChangedEventArgs e)
+        // --- Device discovery ---
+
+        private static SafeFileHandle? TryOpenHidraw(string unixPath, uint access, out string? openedPath)
         {
-            if (_disposed) return;
-            if (_stream == null && FindDevice() != null)
-                SimHub.Logging.Current.Info("[GX100] Device detected via hotplug");
+            // Wine maps the unix root onto Z:; fall back to the bare unix path in
+            // case the plugin is running somewhere that resolves it directly.
+            string winePath = @"Z:" + unixPath.Replace('/', '\\');
+
+            foreach (string candidate in new[] { winePath, unixPath })
+            {
+                SafeFileHandle handle;
+                try
+                {
+                    handle = CreateFile(candidate, access, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                        IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+                }
+                catch (Exception ex)
+                {
+                    SimHub.Logging.Current.Warn($"[GX100] CreateFile({candidate}) threw: {ex.Message}");
+                    continue;
+                }
+
+                if (!handle.IsInvalid)
+                {
+                    openedPath = candidate;
+                    return handle;
+                }
+
+                SimHub.Logging.Current.Warn(
+                    $"[GX100] CreateFile({candidate}) failed: error {Marshal.GetLastWin32Error()}");
+                handle.Dispose();
+            }
+
+            openedPath = null;
+            return null;
         }
 
+        /// <summary>Native-Windows fallback only; picks the interface with the largest output report.</summary>
         private static HidDevice? FindDevice()
         {
             HidDevice? best = null;
@@ -298,10 +374,6 @@ namespace GX100Plugin.Protocol
                     continue;
 
                 int outLen = device.GetMaxOutputReportLength();
-                int inLen = device.GetMaxInputReportLength();
-                SimHub.Logging.Current.Info(
-                    $"[GX100] Found HID interface: maxOut={outLen} maxIn={inLen} path={device.DevicePath}");
-
                 if (outLen > bestOutputLen)
                 {
                     best = device;
@@ -315,34 +387,30 @@ namespace GX100Plugin.Protocol
         private static string? FindHidrawPath()
         {
             const string sysClass = "/sys/class/hidraw";
-            if (!Directory.Exists(sysClass))
-            {
-                string wineSysClass = @"Z:\sys\class\hidraw";
-                if (Directory.Exists(wineSysClass))
-                    return FindHidrawInDir(wineSysClass);
-                return null;
-            }
-            return FindHidrawInDir(sysClass);
+            if (Directory.Exists(sysClass))
+                return FindHidrawInDir(sysClass);
+
+            const string wineSysClass = @"Z:\sys\class\hidraw";
+            if (Directory.Exists(wineSysClass))
+                return FindHidrawInDir(wineSysClass);
+
+            return null;
         }
 
         private static string? FindHidrawInDir(string sysClass)
         {
+            // HID uevents spell the ids as 8 hex digits: HID_ID=0003:000004B0:00005750
             string vidPid = $"{GX100Protocol.VendorId:X8}:{GX100Protocol.ProductId:X8}";
 
             try
             {
                 foreach (var entry in Directory.GetDirectories(sysClass))
                 {
-                    string name = Path.GetFileName(entry);
                     string ueventPath = Path.Combine(entry, "device", "uevent");
                     if (!File.Exists(ueventPath)) continue;
 
-                    string uevent = File.ReadAllText(ueventPath);
-                    if (uevent.Contains(vidPid))
-                    {
-                        SimHub.Logging.Current.Info($"[GX100] Found hidraw match: {name} (uevent contains {vidPid})");
-                        return $"/dev/{name}";
-                    }
+                    if (File.ReadAllText(ueventPath).Contains(vidPid))
+                        return $"/dev/{Path.GetFileName(entry)}";
                 }
             }
             catch (Exception ex)
@@ -357,7 +425,6 @@ namespace GX100Plugin.Protocol
         {
             if (_disposed) return;
             _disposed = true;
-            DeviceList.Local.Changed -= OnDeviceListChanged;
             Disconnect();
         }
     }
