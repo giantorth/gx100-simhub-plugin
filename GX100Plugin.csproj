@@ -11,7 +11,7 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <Version>0.1.0</Version>
     <AssemblyTitle>GX100Plugin</AssemblyTitle>
-    <Description>SimHub plugin for GX-100 USB shifter</Description>
+    <Description>SimHub plugin for GX100 USB shifter</Description>
     <Product>GX100Plugin</Product>
     <Copyright>Copyright 2026</Copyright>
     <UseWPF>true</UseWPF>

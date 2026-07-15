@@ -9,9 +9,9 @@ using Timer = System.Timers.Timer;
 
 namespace GX100Plugin
 {
-    [PluginDescription("Configure GX-100 USB shifter with per-game profiles")]
+    [PluginDescription("Configure GX100 USB shifter with per-game profiles")]
     [PluginAuthor("giantorth")]
-    [PluginName("GX-100 Shifter")]
+    [PluginName("GX100 Shifter")]
     public class GX100Plugin : IPlugin, IDataPlugin, IWPFSettingsV2
     {
         private GX100HidConnection _connection = null!;
@@ -23,7 +23,7 @@ namespace GX100Plugin
 
         public PluginManager PluginManager { set => _pluginManager = value; }
         public ImageSource? PictureIcon => null;
-        public string LeftMenuTitle => "GX-100";
+        public string LeftMenuTitle => "GX100";
 
         internal GX100Data Data => _data;
         internal GX100PluginSettings Settings => _settings;

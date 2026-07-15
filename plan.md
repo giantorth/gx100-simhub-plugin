@@ -1,10 +1,10 @@
-# GX-100 SimHub Plugin Plan
+# GX100 SimHub Plugin Plan
 
 ## Context
 
-The user has a GX-100 USB shifter with an existing Linux control tool (Foxblat plugin at `/home/rorth/src/foxblat/plugins/gx100/`) and a Linux kernel HID driver (`/home/rorth/src/hid-gx100-shifter/`). They also have a mature SimHub plugin for MOZA Racing hardware (`/home/rorth/src/moza-simhub-plugin/`) that demonstrates the exact patterns to follow.
+The user has a GX100 USB shifter with an existing Linux control tool (Foxblat plugin at `/home/rorth/src/foxblat/plugins/gx100/`) and a Linux kernel HID driver (`/home/rorth/src/hid-gx100-shifter/`). They also have a mature SimHub plugin for MOZA Racing hardware (`/home/rorth/src/moza-simhub-plugin/`) that demonstrates the exact patterns to follow.
 
-**Goal:** Create a new standalone SimHub plugin that lets users configure GX-100 shifter settings from within SimHub, with per-game profiles (e.g., H-pattern mode + sensitivity 180 for ETS2, sequential mode + sensitivity 200 for ACC).
+**Goal:** Create a new standalone SimHub plugin that lets users configure GX100 shifter settings from within SimHub, with per-game profiles (e.g., H-pattern mode + sensitivity 180 for ETS2, sequential mode + sensitivity 200 for ACC).
 
 ## Device Summary
 
@@ -40,7 +40,7 @@ UI/
 GX100Plugin.cs                     # IPlugin, IDataPlugin, IWPFSettingsV2 entry point
 ```
 
-No `Devices/` or `DeviceTemplates/` directories -- the GX-100 is a shifter with no LEDs, so no ILedDeviceManager or device extension is needed.
+No `Devices/` or `DeviceTemplates/` directories -- the GX100 is a shifter with no LEDs, so no ILedDeviceManager or device extension is needed.
 
 ## Layer Design
 
@@ -79,9 +79,9 @@ Volatile fields:
 Pattern: identical to `MozaPlugin.cs` (ref: `/home/rorth/src/moza-simhub-plugin/MozaPlugin.cs`)
 
 ```csharp
-[PluginDescription("Configure GX-100 USB shifter with per-game profiles")]
+[PluginDescription("Configure GX100 USB shifter with per-game profiles")]
 [PluginAuthor("giantorth")]
-[PluginName("GX-100 Shifter")]
+[PluginName("GX100 Shifter")]
 public class GX100Plugin : IPlugin, IDataPlugin, IWPFSettingsV2
 ```
 
@@ -113,7 +113,7 @@ public class GX100Plugin : IPlugin, IDataPlugin, IWPFSettingsV2
 **`GX100ProfileStore.cs`** (~15 lines)
 - Pattern: same as `MozaProfileStore` (ref: `/home/rorth/src/moza-simhub-plugin/UI/MozaProfileStore.cs`)
 - `ProfileSettingsBase<GX100Profile, GX100ProfileStore>`
-- `FileFilter => "GX-100 profile (*.shgx100profile)|*.shgx100profile"`
+- `FileFilter => "GX100 profile (*.shgx100profile)|*.shgx100profile"`
 
 ### 5. UI (`UI/SettingsControl.xaml + .cs`) (~400 lines total)
 
@@ -214,21 +214,21 @@ Same SDK-style as Moza (ref: `/home/rorth/src/moza-simhub-plugin/MozaPlugin.cspr
 2. **No DeviceManager abstraction** -- protocol too simple for command database; connection class directly builds 2 report types
 3. **No device extension** -- shifter has no LEDs; per-game profiles handled entirely by ProfileBase
 4. **Direct HID input reading** -- background thread reads input reports for gear state; doesn't rely on SimHub's joystick mapping (more reliable, works regardless of how Windows enumerates the device)
-5. **Send full config report on any change** -- the GX-100 uses a single monolithic config report, so always send all 6 settings together
+5. **Send full config report on any change** -- the GX100 uses a single monolithic config report, so always send all 6 settings together
 
 ## Potential Issues
 
 1. **HidSharp DLL conflict** -- SimHub may already bundle HidSharp. Check SimHub install dir; if present, reference theirs instead of shipping a second copy.
 2. **Windows HID exclusive access** -- Windows game controller driver may hold the HID device. HidSharp opens in shared mode by default, but verify output reports work while the device is also read as a joystick.
-3. **Output report ID byte** -- If device has no numbered reports, Windows HID API may prepend a 0x00 report ID. HidSharp handles this, but verify exact byte layout the GX-100 firmware expects.
+3. **Output report ID byte** -- If device has no numbered reports, Windows HID API may prepend a 0x00 report ID. HidSharp handles this, but verify exact byte layout the GX100 firmware expects.
 4. **Calibration UX** -- Must prevent starting one calibration while another is active. UI disables the other calibration button while one is in progress (same pattern as Foxblat plugin).
 
 ## Verification
 
 1. **Build:** `dotnet build` succeeds targeting net48/x86
 2. **Deploy:** DLL copies to SimHub directory
-3. **Load:** SimHub shows "GX-100 Shifter" in plugin list with settings panel
-4. **Connect:** Plugin auto-detects GX-100 when plugged in, `GX100.Connected` = true
+3. **Load:** SimHub shows "GX100 Shifter" in plugin list with settings panel
+4. **Connect:** Plugin auto-detects GX100 when plugged in, `GX100.Connected` = true
 5. **Configure:** Changing sensitivity slider sends config report, device responds
 6. **Input:** Shifting gears updates `GX100.CurrentGear` and `GX100.GearName` properties
 7. **Profiles:** Creating per-game profiles, switching games auto-applies correct settings
