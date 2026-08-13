@@ -33,7 +33,7 @@ Telemetry/
   GX100Data.cs                     # volatile fields for device + input state
 UI/
   GX100PluginSettings.cs           # persisted settings via ReadCommonSettings
-  GX100Profile.cs                  # ProfileBase<T,S> with -1 sentinels
+  GX100Profile.cs                  # ProfileBase<T,S>, always a complete config
   GX100ProfileStore.cs             # ProfileSettingsBase<T,S>
   SettingsControl.xaml              # WPF UI
   SettingsControl.xaml.cs           # code-behind with _suppressEvents + 500ms refresh
@@ -94,7 +94,7 @@ public class GX100Plugin : IPlugin, IDataPlugin, IWPFSettingsV2
   - `GX100.Connected`, `GX100.CurrentGear`, `GX100.GearName`, `GX100.SequentialMode`
   - `GX100.SeqUp`, `GX100.SeqDown`, `GX100.Button1`-`GX100.Button5`
 - **Profile system**: same `InitProfileSystem()` / `OnProfileChanged()` / `ApplyProfile()` flow as Moza
-- **`ApplyProfile()`**: copy sentinel-checked values into `_data` + `_settings`, send config report if connected
+- **`ApplyProfile()`**: copy *all* profile values into `_settings` + `_data`, send config report, notify the settings panel to redisplay
 
 ### 4. Settings & Profile System (`UI/`)
 
@@ -106,14 +106,19 @@ public class GX100Plugin : IPlugin, IDataPlugin, IWPFSettingsV2
 **`GX100Profile.cs`** (~80 lines)
 - Pattern: same as `MozaProfile` (ref: `/home/rorth/src/moza-simhub-plugin/UI/MozaProfile.cs`)
 - `ProfileBase<GX100Profile, GX100ProfileStore>`
-- 6 settings as `int` with `-1` sentinel (bools stored as 0/1/-1)
-- `CaptureFromCurrent(settings, data)` -- snapshot current state
+- 6 settings as `int` (bools stored as 0/1). No "unset" value: a profile always
+  describes a complete configuration, so applying one is not order-dependent
+- `CaptureFromCurrent(settings)` / `ApplyTo(settings)` -- inverses
+- `Normalize(fallback)` -- fills in anything the device would reject, including the
+  `-1` "not included" guard written by earlier versions
 - `CopyProfilePropertiesFrom(GX100Profile p)` -- deep copy
 
-**`GX100ProfileStore.cs`** (~15 lines)
+**`GX100ProfileStore.cs`** (~40 lines)
 - Pattern: same as `MozaProfileStore` (ref: `/home/rorth/src/moza-simhub-plugin/UI/MozaProfileStore.cs`)
 - `ProfileSettingsBase<GX100Profile, GX100ProfileStore>`
 - `FileFilter => "GX100 profile (*.shgx100profile)|*.shgx100profile"`
+- `InitProfile()` normalizes every profile SimHub hands over (restored, created,
+  cloned, imported); `SetProfileDefaults()` seeds new ones from the live config
 
 ### 5. UI (`UI/SettingsControl.xaml + .cs`) (~400 lines total)
 

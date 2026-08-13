@@ -1,5 +1,4 @@
 using System.Windows.Controls;
-using GX100Plugin.Telemetry;
 using Newtonsoft.Json;
 using SimHub.Plugins.ProfilesCommon;
 
@@ -10,14 +9,18 @@ namespace GX100Plugin
         [JsonIgnore]
         public override Control ProfileContentControl => null!;
 
-        // All settings use -1 sentinel for "not included in this profile"
-        // Bools stored as 0/1/-1
-        public int HSensitivity { get; set; } = -1;
-        public int SeqSensitivity { get; set; } = -1;
-        public int ComboSwitch1 { get; set; } = -1;
-        public int ComboSwitch2 { get; set; } = -1;
-        public int SequentialMode { get; set; } = -1;
-        public int PullButton { get; set; } = -1;
+        // Every profile carries a complete configuration; there is no "not included
+        // in this profile" value. A profile that could omit settings cannot be
+        // applied deterministically — the omitted ones would silently keep whatever
+        // the previously selected profile left on the device, so what the shifter
+        // did depended on which profile happened to precede this one.
+        // Bools are stored as 0/1.
+        public int HSensitivity { get; set; } = GX100Defaults.HSensitivity;
+        public int SeqSensitivity { get; set; } = GX100Defaults.SeqSensitivity;
+        public int ComboSwitch1 { get; set; } = GX100Defaults.ComboSwitch1;
+        public int ComboSwitch2 { get; set; } = GX100Defaults.ComboSwitch2;
+        public int SequentialMode { get; set; } = GX100Defaults.SequentialMode;
+        public int PullButton { get; set; } = GX100Defaults.PullButton;
 
         public override void CopyProfilePropertiesFrom(GX100Profile p)
         {
@@ -29,7 +32,8 @@ namespace GX100Plugin
             PullButton = p.PullButton;
         }
 
-        public void CaptureFromCurrent(GX100PluginSettings settings, GX100Data data)
+        /// <summary>Records the configuration currently in use into this profile.</summary>
+        public void CaptureFromCurrent(GX100PluginSettings settings)
         {
             HSensitivity = settings.HSensitivity;
             SeqSensitivity = settings.SeqSensitivity;
@@ -37,6 +41,37 @@ namespace GX100Plugin
             ComboSwitch2 = settings.ComboSwitch2;
             SequentialMode = settings.SequentialMode;
             PullButton = settings.PullButton;
+        }
+
+        /// <summary>
+        /// The inverse of <see cref="CaptureFromCurrent"/>: makes this profile the
+        /// configuration in use. Writes all six settings, so nothing survives from
+        /// whichever profile was selected before.
+        /// </summary>
+        public void ApplyTo(GX100PluginSettings settings)
+        {
+            settings.HSensitivity = HSensitivity;
+            settings.SeqSensitivity = SeqSensitivity;
+            settings.ComboSwitch1 = ComboSwitch1;
+            settings.ComboSwitch2 = ComboSwitch2;
+            settings.SequentialMode = SequentialMode;
+            settings.PullButton = PullButton;
+        }
+
+        /// <summary>
+        /// Fills in any setting the device would reject, leaving usable ones alone.
+        /// Profiles written before every setting became mandatory stored -1 for
+        /// "not included"; those load as the configuration that was in use at the
+        /// time of the upgrade rather than resetting the user to stock values.
+        /// </summary>
+        public void Normalize(GX100PluginSettings fallback)
+        {
+            if (!GX100Defaults.IsSensitivity(HSensitivity)) HSensitivity = fallback.HSensitivity;
+            if (!GX100Defaults.IsSensitivity(SeqSensitivity)) SeqSensitivity = fallback.SeqSensitivity;
+            if (!GX100Defaults.IsFlag(ComboSwitch1)) ComboSwitch1 = fallback.ComboSwitch1;
+            if (!GX100Defaults.IsFlag(ComboSwitch2)) ComboSwitch2 = fallback.ComboSwitch2;
+            if (!GX100Defaults.IsFlag(SequentialMode)) SequentialMode = fallback.SequentialMode;
+            if (!GX100Defaults.IsFlag(PullButton)) PullButton = fallback.PullButton;
         }
     }
 }

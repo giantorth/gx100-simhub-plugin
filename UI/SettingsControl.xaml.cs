@@ -20,16 +20,65 @@ namespace GX100Plugin
             InitializeComponent();
             _suppressEvents = false;
 
-            ProfileListControl.DataContext = _plugin.Settings.ProfileStore;
+            BindProfileStore();
 
             _refreshTimer = new DispatcherTimer
             {
                 Interval = TimeSpan.FromMilliseconds(50)
             };
             _refreshTimer.Tick += RefreshUI;
-            _refreshTimer.Start();
+
+            Loaded += OnLoaded;
+            Unloaded += OnUnloaded;
+
+            // Attached here and not only from Loaded: the panel has to track the
+            // plugin even if the host never raises Loaded for it. Nothing here
+            // depends on being in the visual tree.
+            Attach();
 
             LoadSettingsIntoUI();
+        }
+
+        private void Attach()
+        {
+            // Removing first keeps this idempotent, so Loaded firing more than once
+            // cannot stack up duplicate handlers.
+            _plugin.ConfigurationChanged -= OnConfigurationChanged;
+            _plugin.ConfigurationChanged += OnConfigurationChanged;
+            _refreshTimer.Start();
+        }
+
+        private void Detach()
+        {
+            _plugin.ConfigurationChanged -= OnConfigurationChanged;
+            _refreshTimer.Stop();
+        }
+
+        // SimHub shows and hides this panel as the user moves between settings pages.
+        // Re-reading on show also covers any profile switch that happened while it
+        // was detached.
+        private void OnLoaded(object sender, RoutedEventArgs e)
+        {
+            Attach();
+            LoadSettingsIntoUI();
+        }
+
+        private void OnUnloaded(object sender, RoutedEventArgs e) => Detach();
+
+        /// <summary>
+        /// A profile switch — including the automatic one SimHub performs when a game
+        /// loads — replaces the live configuration underneath this panel. Redisplaying
+        /// keeps the controls honest, and stops the next edit from capturing the
+        /// values of the outgoing profile back into the incoming one.
+        /// </summary>
+        private void OnConfigurationChanged()
+        {
+            Dispatcher.BeginInvoke(new Action(LoadSettingsIntoUI));
+        }
+
+        private void BindProfileStore()
+        {
+            ProfileListControl.DataContext = _plugin.Settings.ProfileStore;
         }
 
         private void LoadSettingsIntoUI()
@@ -181,6 +230,9 @@ namespace GX100Plugin
         private void ClearSettings_Click(object sender, RoutedEventArgs e)
         {
             _plugin.ClearSettings();
+            // Clearing builds a fresh profile store; the list has to be pointed at it
+            // or it would keep editing the discarded one.
+            BindProfileStore();
             LoadSettingsIntoUI();
         }
     }

@@ -30,6 +30,13 @@ namespace GX100Plugin
         internal GX100Data Data => _data;
         internal GX100PluginSettings Settings => _settings;
 
+        /// <summary>
+        /// Raised after something other than the settings panel has changed the live
+        /// configuration — applying a profile, or clearing settings — so an open
+        /// panel can redisplay it.
+        /// </summary>
+        internal event Action? ConfigurationChanged;
+
         public void Init(PluginManager pluginManager)
         {
             _pluginManager = pluginManager;
@@ -38,6 +45,8 @@ namespace GX100Plugin
 
             if (_settings.ProfileStore == null)
                 _settings.ProfileStore = new GX100ProfileStore();
+
+            _settings.Normalize();
 
             SimHub.Logging.Current.Info("[GX100] Initializing plugin");
 
@@ -159,7 +168,19 @@ namespace GX100Plugin
 
         internal void SendCurrentConfig()
         {
-            if (!_connection.IsConnected) return;
+            string detail =
+                $"H={_data.HSensitivity} Seq={_data.SeqSensitivity} " +
+                $"Mode={(_data.SequentialMode ? "SEQ" : "H")} CB1={_data.ComboSwitch1} " +
+                $"CB2={_data.ComboSwitch2} Pull={_data.PullButton}";
+
+            // Say so rather than returning quietly: "my settings did not take effect"
+            // and "the shifter is not plugged in" look identical from the UI. The
+            // config is not lost — TryConnect sends it as soon as the device appears.
+            if (!_connection.IsConnected)
+            {
+                SimHub.Logging.Current.Info($"[GX100] Not connected, config deferred: {detail}");
+                return;
+            }
 
             bool sent = _connection.SendConfiguration(
                 _data.ComboSwitch1,
@@ -169,11 +190,6 @@ namespace GX100Plugin
                 _data.SeqSensitivity,
                 _data.PullButton
             );
-
-            string detail =
-                $"H={_data.HSensitivity} Seq={_data.SeqSensitivity} " +
-                $"Mode={(_data.SequentialMode ? "SEQ" : "H")} CB1={_data.ComboSwitch1} " +
-                $"CB2={_data.ComboSwitch2} Pull={_data.PullButton}";
 
             if (sent)
                 SimHub.Logging.Current.Info($"[GX100] Config sent: {detail}");
@@ -224,7 +240,7 @@ namespace GX100Plugin
 
         internal void SaveSettings()
         {
-            _settings.ProfileStore?.CurrentProfile?.CaptureFromCurrent(_settings, _data);
+            _settings.ProfileStore?.CurrentProfile?.CaptureFromCurrent(_settings);
             ScheduleSave();
         }
 
@@ -242,6 +258,11 @@ namespace GX100Plugin
 
         internal void ClearSettings()
         {
+            // InitProfileSystem subscribes to the store it is given, so the outgoing
+            // store has to be released or its events would keep applying profiles
+            // that are no longer reachable from the UI.
+            _settings.ProfileStore.CurrentProfileChanged -= OnProfileChanged;
+
             _settings = new GX100PluginSettings();
             this.SaveCommonSettings("GX100PluginSettings", _settings);
             SyncSettingsToData();
@@ -264,72 +285,57 @@ namespace GX100Plugin
         {
             var store = _settings.ProfileStore;
 
+            // Seeds new profiles and completes ones saved by a version that allowed
+            // settings to be omitted. Must be set before Init(), which is where the
+            // stored profiles get completed.
+            store.Owner = _settings;
+
             if (store.Profiles.Count == 0)
             {
                 var defaultProfile = new GX100Profile { Name = "Default" };
+                defaultProfile.CaptureFromCurrent(_settings);
                 store.Profiles.Add(defaultProfile);
             }
 
             store.Init();
             store.CurrentProfileChanged += OnProfileChanged;
 
-            if (store.CurrentProfile != null)
-            {
-                SimHub.Logging.Current.Info($"[GX100] Initial profile: {store.CurrentProfile.Name}");
-                if (_settings.AutoApplyProfileOnLaunch)
-                    ApplyProfile(store.CurrentProfile);
-            }
+            var current = store.CurrentProfile;
+            if (current == null) return;
+
+            if (_settings.AutoApplyProfileOnLaunch)
+                ApplyProfile(current);
+            else
+                SimHub.Logging.Current.Info(
+                    $"[GX100] Initial profile '{current.Name}' left unapplied (auto-apply is off)");
         }
 
         private void OnProfileChanged(object sender, EventArgs e)
         {
             var profile = _settings.ProfileStore.CurrentProfile;
             if (profile != null)
-            {
-                SimHub.Logging.Current.Info($"[GX100] Profile changed: {profile.Name}");
                 ApplyProfile(profile);
-            }
         }
 
+        /// <summary>
+        /// Makes <paramref name="profile"/> the live configuration. Every setting the
+        /// profile holds is applied — none is optional — so the device ends up in
+        /// exactly the state the profile describes, whatever preceded it.
+        /// </summary>
         internal void ApplyProfile(GX100Profile profile)
         {
             SimHub.Logging.Current.Info($"[GX100] Applying profile: {profile.Name}");
 
-            if (profile.HSensitivity >= 0)
-            {
-                _settings.HSensitivity = profile.HSensitivity;
-                _data.HSensitivity = profile.HSensitivity;
-            }
-            if (profile.SeqSensitivity >= 0)
-            {
-                _settings.SeqSensitivity = profile.SeqSensitivity;
-                _data.SeqSensitivity = profile.SeqSensitivity;
-            }
-            if (profile.ComboSwitch1 >= 0)
-            {
-                _settings.ComboSwitch1 = profile.ComboSwitch1;
-                _data.ComboSwitch1 = profile.ComboSwitch1 != 0;
-            }
-            if (profile.ComboSwitch2 >= 0)
-            {
-                _settings.ComboSwitch2 = profile.ComboSwitch2;
-                _data.ComboSwitch2 = profile.ComboSwitch2 != 0;
-            }
-            if (profile.SequentialMode >= 0)
-            {
-                _settings.SequentialMode = profile.SequentialMode;
-                _data.SequentialMode = profile.SequentialMode != 0;
-            }
-            if (profile.PullButton >= 0)
-            {
-                _settings.PullButton = profile.PullButton;
-                _data.PullButton = profile.PullButton != 0;
-            }
-
-            if (_connection.IsConnected)
-                SendCurrentConfig();
-
+            profile.Normalize(_settings);
+            profile.ApplyTo(_settings);
+            SyncSettingsToData();
+            SendCurrentConfig();
             ScheduleSave();
+
+            // An open settings panel is still showing the outgoing profile. Leaving
+            // it stale would also let the next control the user touches capture those
+            // stale values straight back over the profile that was just applied.
+            ConfigurationChanged?.Invoke();
         }
     }
 }
