@@ -52,6 +52,7 @@ namespace GX100Plugin
 
             SyncSettingsToData();
             RegisterProperties(pluginManager);
+            RegisterActions();
 
             _connection = new GX100HidConnection();
             _connection.ButtonStateChanged += OnButtonStateChanged;
@@ -119,6 +120,45 @@ namespace GX100Plugin
             this.AttachDelegate("GX100.Button3", () => _data.Button3);
             this.AttachDelegate("GX100.Button4", () => _data.Button4);
             this.AttachDelegate("GX100.Button5", () => _data.Button5);
+        }
+
+        // --- Actions ---
+
+        private void RegisterActions()
+        {
+            // Bindable from SimHub's controls page, so the mode can be flipped from a
+            // wheel button mid-session. Unlike the settings panel's checkbox — which
+            // stages the change until Apply — these push to the device as they fire:
+            // a button press is expected to change how the shifter behaves there and
+            // then.
+            this.AddAction("GX100.SequentialModeToggle", (a, b) => SetSequentialMode(!_data.SequentialMode));
+            this.AddAction("GX100.SequentialModeOn", (a, b) => SetSequentialMode(true));
+            this.AddAction("GX100.SequentialModeOff", (a, b) => SetSequentialMode(false));
+        }
+
+        /// <summary>
+        /// Switches the shifter between H-pattern and sequential mode and sends the
+        /// change to the device immediately. Follows the same commit path as the
+        /// settings panel — live data, settings, active profile, persistence — so
+        /// nothing later reinstates the mode that was just switched away from.
+        /// </summary>
+        internal void SetSequentialMode(bool sequential)
+        {
+            // Already there: skip the redundant report rather than make the device
+            // re-read a configuration it is already running.
+            if (_data.SequentialMode == sequential) return;
+
+            _data.SequentialMode = sequential;
+            _settings.SequentialMode = sequential ? 1 : 0;
+            SaveSettings();
+            SendCurrentConfig();
+
+            SimHub.Logging.Current.Info(
+                $"[GX100] Sequential mode {(sequential ? "on" : "off")} via action");
+
+            // An open settings panel is still showing the old mode, and the next
+            // control the user touches would capture it straight back over this.
+            ConfigurationChanged?.Invoke();
         }
 
         // --- Connection ---
