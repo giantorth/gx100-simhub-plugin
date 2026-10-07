@@ -57,24 +57,6 @@
                 <CheckBox x:Name="SeqModeToggle" Checked="SeqModeToggle_Changed" Unchecked="SeqModeToggle_Changed"/>
             </StackPanel>
 
-            <!-- H-Pattern Sensitivity -->
-            <StackPanel Orientation="Horizontal" Margin="0,4">
-                <TextBlock Text="H-Pattern Sensitivity" Style="{StaticResource SliderLabel}"/>
-                <Slider x:Name="HSensSlider" Style="{StaticResource SettingSlider}"
-                        Minimum="0" Maximum="255" TickFrequency="1"
-                        ValueChanged="HSensSlider_Changed"/>
-                <TextBlock x:Name="HSensValue" Style="{StaticResource SliderValue}"/>
-            </StackPanel>
-
-            <!-- Sequential Sensitivity -->
-            <StackPanel Orientation="Horizontal" Margin="0,4">
-                <TextBlock Text="Sequential Sensitivity" Style="{StaticResource SliderLabel}"/>
-                <Slider x:Name="SeqSensSlider" Style="{StaticResource SettingSlider}"
-                        Minimum="0" Maximum="255" TickFrequency="1"
-                        ValueChanged="SeqSensSlider_Changed"/>
-                <TextBlock x:Name="SeqSensValue" Style="{StaticResource SliderValue}"/>
-            </StackPanel>
-
             <!-- Switches -->
             <StackPanel Orientation="Horizontal" Margin="0,4">
                 <TextBlock Text="Combination Switch 1" Style="{StaticResource SliderLabel}"/>
@@ -95,6 +77,25 @@
 
             <!-- Calibration -->
             <TextBlock Text="Calibration" Style="{StaticResource SectionHeader}"/>
+
+            <!-- H-Pattern Sensitivity -->
+            <StackPanel Orientation="Horizontal" Margin="0,4">
+                <TextBlock Text="H-Pattern Sensitivity" Style="{StaticResource SliderLabel}"/>
+                <Slider x:Name="HSensSlider" Style="{StaticResource SettingSlider}"
+                        Minimum="0" Maximum="255" TickFrequency="1"
+                        ValueChanged="HSensSlider_Changed"/>
+                <TextBlock x:Name="HSensValue" Style="{StaticResource SliderValue}"/>
+            </StackPanel>
+
+            <!-- Sequential Sensitivity -->
+            <StackPanel Orientation="Horizontal" Margin="0,4">
+                <TextBlock Text="Sequential Sensitivity" Style="{StaticResource SliderLabel}"/>
+                <Slider x:Name="SeqSensSlider" Style="{StaticResource SettingSlider}"
+                        Minimum="0" Maximum="255" TickFrequency="1"
+                        ValueChanged="SeqSensSlider_Changed"/>
+                <TextBlock x:Name="SeqSensValue" Style="{StaticResource SliderValue}"/>
+            </StackPanel>
+
             <StackPanel Orientation="Horizontal" Margin="0,4">
                 <Button x:Name="HCalButton" Content="Start H-Pattern Calibration" Width="220"
                         Click="HCalButton_Click" Margin="0,0,10,0"/>

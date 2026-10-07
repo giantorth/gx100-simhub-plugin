@@ -11,6 +11,7 @@ namespace GX100Plugin
     {
         private readonly GX100Plugin _plugin;
         private readonly DispatcherTimer _refreshTimer;
+        private readonly DispatcherTimer _sensitivitySendTimer;
         private bool _suppressEvents;
 
         public SettingsControl(GX100Plugin plugin)
@@ -27,6 +28,19 @@ namespace GX100Plugin
                 Interval = TimeSpan.FromMilliseconds(50)
             };
             _refreshTimer.Tick += RefreshUI;
+
+            // A slider raises ValueChanged for every step of a drag. Waiting for it
+            // to settle sends one report per adjustment instead of flooding the
+            // device, and covers mouse, keyboard and track clicks alike.
+            _sensitivitySendTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(300)
+            };
+            _sensitivitySendTimer.Tick += (s, e) =>
+            {
+                _sensitivitySendTimer.Stop();
+                _plugin.SendCurrentConfig();
+            };
 
             Loaded += OnLoaded;
             Unloaded += OnUnloaded;
@@ -166,6 +180,7 @@ namespace GX100Plugin
             _plugin.Data.HSensitivity = value;
             _plugin.Settings.HSensitivity = value;
             _plugin.SaveSettings();
+            ScheduleSensitivitySend();
         }
 
         private void SeqSensSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -176,6 +191,13 @@ namespace GX100Plugin
             _plugin.Data.SeqSensitivity = value;
             _plugin.Settings.SeqSensitivity = value;
             _plugin.SaveSettings();
+            ScheduleSensitivitySend();
+        }
+
+        private void ScheduleSensitivitySend()
+        {
+            _sensitivitySendTimer.Stop();
+            _sensitivitySendTimer.Start();
         }
 
         private void Combo1Toggle_Changed(object sender, RoutedEventArgs e)

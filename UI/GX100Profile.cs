@@ -15,8 +15,10 @@ namespace GX100Plugin
         // the previously selected profile left on the device, so what the shifter
         // did depended on which profile happened to precede this one.
         // Bools are stored as 0/1.
-        public int HSensitivity { get; set; } = GX100Defaults.HSensitivity;
-        public int SeqSensitivity { get; set; } = GX100Defaults.SeqSensitivity;
+        //
+        // Sensitivities are deliberately absent: they tune the shifter hardware, not
+        // a game, so they live only in the plugin settings and a profile switch
+        // leaves them alone.
         public int ComboSwitch1 { get; set; } = GX100Defaults.ComboSwitch1;
         public int ComboSwitch2 { get; set; } = GX100Defaults.ComboSwitch2;
         public int SequentialMode { get; set; } = GX100Defaults.SequentialMode;
@@ -24,8 +26,6 @@ namespace GX100Plugin
 
         public override void CopyProfilePropertiesFrom(GX100Profile p)
         {
-            HSensitivity = p.HSensitivity;
-            SeqSensitivity = p.SeqSensitivity;
             ComboSwitch1 = p.ComboSwitch1;
             ComboSwitch2 = p.ComboSwitch2;
             SequentialMode = p.SequentialMode;
@@ -35,8 +35,6 @@ namespace GX100Plugin
         /// <summary>Records the configuration currently in use into this profile.</summary>
         public void CaptureFromCurrent(GX100PluginSettings settings)
         {
-            HSensitivity = settings.HSensitivity;
-            SeqSensitivity = settings.SeqSensitivity;
             ComboSwitch1 = settings.ComboSwitch1;
             ComboSwitch2 = settings.ComboSwitch2;
             SequentialMode = settings.SequentialMode;
@@ -45,13 +43,11 @@ namespace GX100Plugin
 
         /// <summary>
         /// The inverse of <see cref="CaptureFromCurrent"/>: makes this profile the
-        /// configuration in use. Writes all six settings, so nothing survives from
+        /// configuration in use. Writes every profile setting, so nothing survives from
         /// whichever profile was selected before.
         /// </summary>
         public void ApplyTo(GX100PluginSettings settings)
         {
-            settings.HSensitivity = HSensitivity;
-            settings.SeqSensitivity = SeqSensitivity;
             settings.ComboSwitch1 = ComboSwitch1;
             settings.ComboSwitch2 = ComboSwitch2;
             settings.SequentialMode = SequentialMode;
@@ -66,8 +62,6 @@ namespace GX100Plugin
         /// </summary>
         public void Normalize(GX100PluginSettings fallback)
         {
-            if (!GX100Defaults.IsSensitivity(HSensitivity)) HSensitivity = fallback.HSensitivity;
-            if (!GX100Defaults.IsSensitivity(SeqSensitivity)) SeqSensitivity = fallback.SeqSensitivity;
             if (!GX100Defaults.IsFlag(ComboSwitch1)) ComboSwitch1 = fallback.ComboSwitch1;
             if (!GX100Defaults.IsFlag(ComboSwitch2)) ComboSwitch2 = fallback.ComboSwitch2;
             if (!GX100Defaults.IsFlag(SequentialMode)) SequentialMode = fallback.SequentialMode;
