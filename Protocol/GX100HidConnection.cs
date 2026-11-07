@@ -44,6 +44,13 @@ namespace GX100Plugin.Protocol
         }
 
         public event Action<ushort>? ButtonStateChanged;
+
+        /// <summary>
+        /// Raised for every input report with the six Hall-sensor readings. Unlike
+        /// <see cref="ButtonStateChanged"/> this is not filtered — the readings are
+        /// the point of it, and they change on every report.
+        /// </summary>
+        public event Action<int[]>? SensorsUpdated;
         public event Action? DeviceDisconnected;
 
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -188,11 +195,30 @@ namespace GX100Plugin.Protocol
                 // A runt report is not a disconnect — skip it and keep reading.
                 if (bytesRead < 2) continue;
 
+                if (bytesRead >= GX100Protocol.SensorOffset + GX100Protocol.SensorCount * 2)
+                {
+                    var sensors = new int[GX100Protocol.SensorCount];
+                    for (int i = 0; i < sensors.Length; i++)
+                    {
+                        int o = GX100Protocol.SensorOffset + i * 2;
+                        sensors[i] = (buffer[o] << 8) | buffer[o + 1];
+                    }
+
+                    try
+                    {
+                        SensorsUpdated?.Invoke(sensors);
+                    }
+                    catch (Exception ex)
+                    {
+                        SimHub.Logging.Current.Error($"[GX100] Sensor handler error: {ex.Message}");
+                    }
+                }
+
                 int buttons = buffer[0] | (buffer[1] << 8);
 
                 // The device streams continuously because the Hall-sensor bytes
-                // jitter on every report; only the button field is of interest, so
-                // suppress reports that leave it unchanged.
+                // jitter on every report; button consumers only care about changes,
+                // so suppress reports that leave the button field as it was.
                 if (buttons == lastButtons) continue;
                 lastButtons = buttons;
 

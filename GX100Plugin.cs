@@ -20,12 +20,62 @@ namespace GX100Plugin
         private GX100PluginSettings _settings = null!;
         private Timer _reconnectTimer = null!;
         private Timer? _saveDebounceTimer;
+        private ModeChime? _modeChime;
+        private bool? _lastSentSequential;
+        private readonly System.Diagnostics.Stopwatch _sinceInit = new System.Diagnostics.Stopwatch();
+
+        // SimHub rebuilds the plugin on every game switch, and when it re-enumerates
+        // joysticks it replays the state of any latching switch bound to a mode
+        // action. That replay lands after the game's profile has been applied and
+        // would override it. Enumeration took ~4s after Init on a cold SimHub start
+        // and ~0.6s on a game switch, so this leaves headroom over the slow case.
+        private static readonly TimeSpan ActionStartupGrace = TimeSpan.FromSeconds(10);
         private PluginManager _pluginManager = null!;
         private int _reconnectBusy;
 
         public PluginManager PluginManager { set => _pluginManager = value; }
-        public ImageSource? PictureIcon => null;
+        public ImageSource? PictureIcon => NavIcon.Value;
         public string LeftMenuTitle => "GX100";
+
+        // Six-speed H-pattern gate nav icon. Cyan tint for SimHub's dark nav.
+        private static readonly Lazy<ImageSource> NavIcon = new Lazy<ImageSource>(BuildNavIcon);
+
+        private static ImageSource BuildNavIcon()
+        {
+            var brush = new SolidColorBrush(Color.FromRgb(0x00, 0xE5, 0xFF));
+
+            // Gate slots: three columns (1-2, 3-4, 5-6) joined by the neutral row.
+            var slots = Geometry.Parse("M60 56 L60 184 M120 56 L120 184 M180 56 L180 184 M60 120 L180 120");
+            var pen = new Pen(brush, 22)
+            {
+                StartLineCap = PenLineCap.Round,
+                EndLineCap = PenLineCap.Round,
+                LineJoin = PenLineJoin.Round,
+            };
+
+            // A knob at each gear position, so it reads as a gate rather than a grid.
+            var knobs = new GeometryGroup();
+            foreach (double x in new[] { 60.0, 120.0, 180.0 })
+            {
+                knobs.Children.Add(new EllipseGeometry(new System.Windows.Point(x, 56), 20, 20));
+                knobs.Children.Add(new EllipseGeometry(new System.Windows.Point(x, 184), 20, 20));
+            }
+
+            // Transparent backing rect gives square bounds so SimHub scales the gate
+            // uniformly instead of stretching the bare geometry box.
+            var canvas = new GeometryDrawing(
+                Brushes.Transparent, null,
+                new RectangleGeometry(new System.Windows.Rect(16, 16, 208, 208)));
+
+            var root = new DrawingGroup();
+            root.Children.Add(canvas);
+            root.Children.Add(new GeometryDrawing(null, pen, slots));
+            root.Children.Add(new GeometryDrawing(brush, null, knobs));
+
+            var image = new DrawingImage(root);
+            image.Freeze();
+            return image;
+        }
 
         internal GX100Data Data => _data;
         internal GX100PluginSettings Settings => _settings;
@@ -40,6 +90,7 @@ namespace GX100Plugin
         public void Init(PluginManager pluginManager)
         {
             _pluginManager = pluginManager;
+            _sinceInit.Restart();
             _data = new GX100Data();
             _settings = this.ReadCommonSettings<GX100PluginSettings>("GX100PluginSettings", () => new GX100PluginSettings());
 
@@ -52,10 +103,12 @@ namespace GX100Plugin
 
             SyncSettingsToData();
             RegisterProperties(pluginManager);
+            _modeChime = new ModeChime();
             RegisterActions();
 
             _connection = new GX100HidConnection();
             _connection.ButtonStateChanged += OnButtonStateChanged;
+            _connection.SensorsUpdated += _data.UpdateSensors;
             _connection.DeviceDisconnected += OnDeviceDisconnected;
 
             if (_settings.ConnectionEnabled)
@@ -95,9 +148,13 @@ namespace GX100Plugin
             _saveDebounceTimer?.Dispose();
             _saveDebounceTimer = null;
             this.SaveCommonSettings("GX100PluginSettings", _settings);
+            // A profile switch arriving mid-teardown must not reach a disposed connection.
+            if (_settings?.ProfileStore != null)
+                _settings.ProfileStore.ActiveProfileChanged -= OnProfileChanged;
             _reconnectTimer?.Stop();
             _reconnectTimer?.Dispose();
             _connection?.Dispose();
+            _modeChime?.Dispose();
         }
 
         public System.Windows.Controls.Control GetWPFSettingsControl(PluginManager pluginManager)
@@ -120,6 +177,11 @@ namespace GX100Plugin
             this.AttachDelegate("GX100.Button3", () => _data.Button3);
             this.AttachDelegate("GX100.Button4", () => _data.Button4);
             this.AttachDelegate("GX100.Button5", () => _data.Button5);
+            for (int i = 0; i < Protocol.GX100Protocol.SensorCount; i++)
+            {
+                int index = i;
+                this.AttachDelegate($"GX100.Sensor{index + 1}", () => _data.GetSensor(index));
+            }
         }
 
         // --- Actions ---
@@ -127,38 +189,42 @@ namespace GX100Plugin
         private void RegisterActions()
         {
             // Bindable from SimHub's controls page, so the mode can be flipped from a
-            // wheel button mid-session. Unlike the settings panel's checkbox — which
-            // stages the change until Apply — these push to the device as they fire:
-            // a button press is expected to change how the shifter behaves there and
-            // then.
-            this.AddAction("GX100.SequentialModeToggle", (a, b) => SetSequentialMode(!_data.SequentialMode));
-            this.AddAction("GX100.SequentialModeOn", (a, b) => SetSequentialMode(true));
-            this.AddAction("GX100.SequentialModeOff", (a, b) => SetSequentialMode(false));
+            // wheel button or switch mid-session. They push to the device as they
+            // fire: a button press is expected to change how the shifter behaves
+            // there and then.
+            this.AddAction("GX100.SequentialModeToggle", (a, b) => SetSequentialModeFromAction(!_data.SequentialMode));
+            this.AddAction("GX100.SequentialModeOn", (a, b) => SetSequentialModeFromAction(true));
+            this.AddAction("GX100.SequentialModeOff", (a, b) => SetSequentialModeFromAction(false));
         }
 
         /// <summary>
         /// Switches the shifter between H-pattern and sequential mode and sends the
-        /// change to the device immediately. Follows the same commit path as the
-        /// settings panel — live data, settings, active profile, persistence — so
-        /// nothing later reinstates the mode that was just switched away from.
+        /// change to the device immediately. This is a live override only: neither
+        /// the plugin settings nor the active profile change, so the next profile
+        /// applied (e.g. on game switch) sets the mode again.
         /// </summary>
-        internal void SetSequentialMode(bool sequential)
+        private void SetSequentialModeFromAction(bool sequential)
         {
             // Already there: skip the redundant report rather than make the device
             // re-read a configuration it is already running.
             if (_data.SequentialMode == sequential) return;
 
+            if (_sinceInit.Elapsed < ActionStartupGrace)
+            {
+                SimHub.Logging.Current.Info(
+                    $"[GX100] Sequential mode {(sequential ? "on" : "off")} action ignored — " +
+                    "within startup grace period, profile setting kept");
+                return;
+            }
+
+            // Only the live state changes. _settings keeps the profile's value, so a
+            // later SaveSettings() from the panel can't capture the override into
+            // the profile.
             _data.SequentialMode = sequential;
-            _settings.SequentialMode = sequential ? 1 : 0;
-            SaveSettings();
             SendCurrentConfig();
 
             SimHub.Logging.Current.Info(
                 $"[GX100] Sequential mode {(sequential ? "on" : "off")} via action");
-
-            // An open settings panel is still showing the old mode, and the next
-            // control the user touches would capture it straight back over this.
-            ConfigurationChanged?.Invoke();
         }
 
         // --- Connection ---
@@ -231,10 +297,23 @@ namespace GX100Plugin
                 _data.PullButton
             );
 
-            if (sent)
-                SimHub.Logging.Current.Info($"[GX100] Config sent: {detail}");
-            else
+            if (!sent)
+            {
                 SimHub.Logging.Current.Error($"[GX100] Config send FAILED: {detail}");
+                return;
+            }
+
+            SimHub.Logging.Current.Info($"[GX100] Config sent: {detail}");
+
+            // Chime whenever the device actually switches mode, whatever asked for
+            // it — a bound button, a profile change on game switch, or a toggle in the
+            // settings panel. The first send after startup only establishes the
+            // mode, so it stays silent. The last-sent mode is tracked even while the
+            // chime is disabled, so re-enabling it doesn't chime for a stale change.
+            bool sequential = _data.SequentialMode;
+            if (_settings.ModeChimeEnabled && _lastSentSequential.HasValue && _lastSentSequential != sequential)
+                _modeChime?.Play(sequential);
+            _lastSentSequential = sequential;
         }
 
         // --- Calibration ---
@@ -264,6 +343,16 @@ namespace GX100Plugin
             if (!_connection.IsConnected) return;
 
             bool starting = !_data.IsSeqCalibrating;
+
+            // Sequential calibration only means something with the lever in
+            // sequential mode. Finishing is always allowed, so a calibration that
+            // was running when the mode changed can still be closed out.
+            if (starting && !_data.SequentialMode)
+            {
+                SimHub.Logging.Current.Info("[GX100] Sequential calibration refused — sequential mode is off");
+                return;
+            }
+
             if (!_connection.SendCalibration(starting
                     ? GX100Protocol.CalSequentialStart
                     : GX100Protocol.CalSequentialFinish))
@@ -296,19 +385,6 @@ namespace GX100Plugin
             _saveDebounceTimer.Start();
         }
 
-        internal void ClearSettings()
-        {
-            // InitProfileSystem subscribes to the store it is given, so the outgoing
-            // store has to be released or its events would keep applying profiles
-            // that are no longer reachable from the UI.
-            _settings.ProfileStore.CurrentProfileChanged -= OnProfileChanged;
-
-            _settings = new GX100PluginSettings();
-            this.SaveCommonSettings("GX100PluginSettings", _settings);
-            SyncSettingsToData();
-            InitProfileSystem();
-        }
-
         private void SyncSettingsToData()
         {
             _data.HSensitivity = _settings.HSensitivity;
@@ -338,16 +414,16 @@ namespace GX100Plugin
             }
 
             store.Init();
-            store.CurrentProfileChanged += OnProfileChanged;
+
+            // Not CurrentProfileChanged: SimHub 9.13.3 stopped raising it when a
+            // profile is picked, so dropdown selections went unapplied. The baseline
+            // keeps the profile applied just below from firing a second time.
+            store.ResetActiveProfileBaseline();
+            store.ActiveProfileChanged += OnProfileChanged;
 
             var current = store.CurrentProfile;
-            if (current == null) return;
-
-            if (_settings.AutoApplyProfileOnLaunch)
+            if (current != null)
                 ApplyProfile(current);
-            else
-                SimHub.Logging.Current.Info(
-                    $"[GX100] Initial profile '{current.Name}' left unapplied (auto-apply is off)");
         }
 
         private void OnProfileChanged(object sender, EventArgs e)

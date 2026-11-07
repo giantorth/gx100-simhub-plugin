@@ -9,129 +9,173 @@
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Margin" Value="0,20,0,8"/>
         </Style>
-        <Style x:Key="SliderLabel" TargetType="TextBlock">
-            <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="Width" Value="180"/>
-        </Style>
-        <Style x:Key="SliderValue" TargetType="TextBlock">
-            <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="Width" Value="60"/>
-            <Setter Property="TextAlignment" Value="Right"/>
-            <Setter Property="Margin" Value="8,0,0,0"/>
-            <Setter Property="FontFamily" Value="Consolas"/>
-        </Style>
-        <Style x:Key="SettingSlider" TargetType="Slider">
-            <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="Width" Value="300"/>
-            <Setter Property="IsSnapToTickEnabled" Value="True"/>
-        </Style>
         <Style x:Key="ConnectionDot" TargetType="Ellipse">
             <Setter Property="Width" Value="12"/>
             <Setter Property="Height" Value="12"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
             <Setter Property="Margin" Value="0,0,8,0"/>
         </Style>
+        <Style x:Key="PanelBox" TargetType="Border">
+            <Setter Property="Background" Value="#18000000"/>
+            <Setter Property="BorderBrush" Value="#30FFFFFF"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="4"/>
+            <Setter Property="Padding" Value="8"/>
+            <Setter Property="Margin" Value="0,0,10,0"/>
+        </Style>
+        <Style x:Key="PanelTitle" TargetType="TextBlock">
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Opacity" Value="0.8"/>
+            <Setter Property="Margin" Value="0,0,0,8"/>
+        </Style>
+        <Style x:Key="StatusBox" TargetType="Border">
+            <Setter Property="BorderBrush" Value="#40FFFFFF"/>
+            <Setter Property="Background" Value="#10FFFFFF"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="4"/>
+            <Setter Property="Padding" Value="14,12"/>
+        </Style>
+        <!-- Shared by the gear readout row and the gap between the sequential
+             tiles, so Shift -/+ line up with the gate's top and bottom rows. -->
+        <GridLength x:Key="NeutralRowHeight">60</GridLength>
+        <Style x:Key="PanelDivider" TargetType="Separator">
+            <Setter Property="Margin" Value="0,10,0,6"/>
+            <Setter Property="Opacity" Value="0.3"/>
+        </Style>
+        <Style x:Key="FooterLabel" TargetType="TextBlock">
+            <Setter Property="Opacity" Value="0.7"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="FooterValue" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Consolas"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="8,0,0,0"/>
+        </Style>
+        <Style x:Key="FooterSlider" TargetType="Slider">
+            <Setter Property="Minimum" Value="0"/>
+            <Setter Property="Maximum" Value="255"/>
+            <Setter Property="TickFrequency" Value="1"/>
+            <Setter Property="IsSnapToTickEnabled" Value="True"/>
+            <Setter Property="Margin" Value="0,4,0,8"/>
+        </Style>
     </UserControl.Resources>
 
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="10">
 
-            <!-- Connection -->
-            <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                <CheckBox x:Name="ConnectionToggle" Content="Enable Connection" IsChecked="True"
-                          Checked="ConnectionToggle_Changed" Unchecked="ConnectionToggle_Changed"/>
-                <Ellipse x:Name="ConnectionDot" Style="{StaticResource ConnectionDot}" Fill="Gray" Margin="20,0,8,0"/>
-                <TextBlock x:Name="ConnectionStatus" Text="Disconnected" VerticalAlignment="Center"/>
-            </StackPanel>
+            <!-- Status on the left, profile and settings on the right -->
+            <Grid Margin="0,0,0,4">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
 
-            <!-- Profile Selector -->
-            <TextBlock Text="Profiles" Style="{StaticResource SectionHeader}"/>
-            <profilescommon:ProfileList x:Name="ProfileListControl" Margin="0,0,0,10"/>
+                <Border Grid.Column="0" Style="{StaticResource StatusBox}" VerticalAlignment="Top">
+                    <StackPanel>
+                        <!-- Connection + sequential mode -->
+                        <DockPanel LastChildFill="False">
+                            <Ellipse x:Name="ConnectionDot" DockPanel.Dock="Left"
+                                     Style="{StaticResource ConnectionDot}" Fill="Gray"/>
+                            <TextBlock x:Name="ConnectionStatus" DockPanel.Dock="Left" Text="Disconnected"
+                                       VerticalAlignment="Center" FontWeight="SemiBold"/>
+                            <CheckBox x:Name="ConnectionToggle" DockPanel.Dock="Left" Content="Enable"
+                                      IsChecked="True" Margin="16,0,0,0" VerticalAlignment="Center"
+                                      Checked="ConnectionToggle_Changed" Unchecked="ConnectionToggle_Changed"/>
+                            <!-- Label before the box; clicking the label toggles it too -->
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="Sequential" VerticalAlignment="Center" Margin="0,0,6,0"
+                                           Cursor="Hand" MouseLeftButtonUp="SeqModeLabel_Click"/>
+                                <CheckBox x:Name="SeqModeToggle" VerticalAlignment="Center"
+                                          Checked="SeqModeToggle_Changed" Unchecked="SeqModeToggle_Changed"/>
+                            </StackPanel>
+                        </DockPanel>
 
-            <!-- Configuration -->
-            <TextBlock Text="Configuration" Style="{StaticResource SectionHeader}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                            <!-- H-pattern gate: 1/3/5 over 2/4/6, gear readout in the neutral row -->
+                            <Border x:Name="HPanel" Style="{StaticResource PanelBox}">
+                                <StackPanel>
+                                    <TextBlock Text="H-Pattern" Style="{StaticResource PanelTitle}"/>
+                                    <Grid x:Name="HGateGrid">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="{StaticResource NeutralRowHeight}"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <TextBlock x:Name="GearDisplay" Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3"
+                                                   Text="N" FontSize="36" FontWeight="Bold" FontFamily="Consolas"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Grid>
 
-            <!-- Sequential Mode Toggle -->
-            <StackPanel Orientation="Horizontal" Margin="0,4">
-                <TextBlock Text="Sequential Mode" Style="{StaticResource SliderLabel}"/>
-                <CheckBox x:Name="SeqModeToggle" Checked="SeqModeToggle_Changed" Unchecked="SeqModeToggle_Changed"/>
-            </StackPanel>
+                                    <Separator Style="{StaticResource PanelDivider}"/>
+                                    <DockPanel>
+                                        <TextBlock x:Name="HSensValue" DockPanel.Dock="Right" Style="{StaticResource FooterValue}"/>
+                                        <TextBlock Text="Sensitivity" Style="{StaticResource FooterLabel}"/>
+                                    </DockPanel>
+                                    <Slider x:Name="HSensSlider" Style="{StaticResource FooterSlider}"
+                                            ValueChanged="HSensSlider_Changed"/>
+                                    <Button x:Name="HCalButton" Content="Calibrate" Click="HCalButton_Click"/>
+                                </StackPanel>
+                            </Border>
 
-            <!-- Switches -->
-            <StackPanel Orientation="Horizontal" Margin="0,4">
-                <TextBlock Text="Combination Switch 1" Style="{StaticResource SliderLabel}"/>
-                <CheckBox x:Name="Combo1Toggle" Checked="Combo1Toggle_Changed" Unchecked="Combo1Toggle_Changed"/>
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Margin="0,4">
-                <TextBlock Text="Combination Switch 2" Style="{StaticResource SliderLabel}"/>
-                <CheckBox x:Name="Combo2Toggle" Checked="Combo2Toggle_Changed" Unchecked="Combo2Toggle_Changed"/>
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Margin="0,4">
-                <TextBlock Text="Pull Button" Style="{StaticResource SliderLabel}"/>
-                <CheckBox x:Name="PullBtnToggle" Checked="PullBtnToggle_Changed" Unchecked="PullBtnToggle_Changed"/>
-            </StackPanel>
+                            <!-- Sequential: push (Shift -) above, pull (Shift +) below -->
+                            <Border x:Name="SeqPanel" Style="{StaticResource PanelBox}">
+                                <StackPanel>
+                                    <TextBlock Text="Sequential" Style="{StaticResource PanelTitle}"/>
+                                    <Grid x:Name="SeqGrid">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="{StaticResource NeutralRowHeight}"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                    </Grid>
 
-            <!-- Apply Button -->
-            <Button x:Name="ApplyButton" Content="Apply Settings" Width="150" HorizontalAlignment="Left"
-                    Margin="0,10,0,0" Click="ApplyButton_Click"/>
+                                    <Separator Style="{StaticResource PanelDivider}"/>
+                                    <DockPanel>
+                                        <TextBlock x:Name="SeqSensValue" DockPanel.Dock="Right" Style="{StaticResource FooterValue}"/>
+                                        <TextBlock Text="Sensitivity" Style="{StaticResource FooterLabel}"/>
+                                    </DockPanel>
+                                    <Slider x:Name="SeqSensSlider" Style="{StaticResource FooterSlider}"
+                                            ValueChanged="SeqSensSlider_Changed"/>
+                                    <Button x:Name="SeqCalButton" Content="Calibrate" Click="SeqCalButton_Click"/>
+                                </StackPanel>
+                            </Border>
 
-            <!-- Calibration -->
-            <TextBlock Text="Calibration" Style="{StaticResource SectionHeader}"/>
+                            <!-- Extra buttons -->
+                            <Border Style="{StaticResource PanelBox}" Margin="0">
+                                <StackPanel>
+                                    <TextBlock Text="Buttons" Style="{StaticResource PanelTitle}"/>
+                                    <StackPanel x:Name="ButtonsPanel"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
 
-            <!-- H-Pattern Sensitivity -->
-            <StackPanel Orientation="Horizontal" Margin="0,4">
-                <TextBlock Text="H-Pattern Sensitivity" Style="{StaticResource SliderLabel}"/>
-                <Slider x:Name="HSensSlider" Style="{StaticResource SettingSlider}"
-                        Minimum="0" Maximum="255" TickFrequency="1"
-                        ValueChanged="HSensSlider_Changed"/>
-                <TextBlock x:Name="HSensValue" Style="{StaticResource SliderValue}"/>
-            </StackPanel>
+                        <CheckBox x:Name="ShowSensorsToggle" Content="Show sensor readings" Margin="0,12,0,0"
+                                  Checked="ShowSensorsToggle_Changed" Unchecked="ShowSensorsToggle_Changed"/>
+                    </StackPanel>
+                </Border>
 
-            <!-- Sequential Sensitivity -->
-            <StackPanel Orientation="Horizontal" Margin="0,4">
-                <TextBlock Text="Sequential Sensitivity" Style="{StaticResource SliderLabel}"/>
-                <Slider x:Name="SeqSensSlider" Style="{StaticResource SettingSlider}"
-                        Minimum="0" Maximum="255" TickFrequency="1"
-                        ValueChanged="SeqSensSlider_Changed"/>
-                <TextBlock x:Name="SeqSensValue" Style="{StaticResource SliderValue}"/>
-            </StackPanel>
+                <!-- Right column: profile, then the settings it holds -->
+                <StackPanel Grid.Column="1" Margin="20,0,0,0">
+                    <profilescommon:ProfileList x:Name="ProfileListControl"/>
 
-            <StackPanel Orientation="Horizontal" Margin="0,4">
-                <Button x:Name="HCalButton" Content="Start H-Pattern Calibration" Width="220"
-                        Click="HCalButton_Click" Margin="0,0,10,0"/>
-                <Button x:Name="SeqCalButton" Content="Start Sequential Calibration" Width="220"
-                        Click="SeqCalButton_Click"/>
-            </StackPanel>
-
-            <!-- Status -->
-            <TextBlock Text="Status" Style="{StaticResource SectionHeader}"/>
-            <StackPanel Orientation="Horizontal" Margin="0,4">
-                <TextBlock Text="Current Gear" Style="{StaticResource SliderLabel}"/>
-                <TextBlock x:Name="GearDisplay" Text="N" FontSize="32" FontWeight="Bold"
-                           FontFamily="Consolas" VerticalAlignment="Center"/>
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Margin="0,4">
-                <TextBlock Text="Sequential" Style="{StaticResource SliderLabel}"/>
-                <TextBlock x:Name="SeqUpIndicator" Text="UP" Margin="0,0,10,0" Foreground="Gray"/>
-                <TextBlock x:Name="SeqDownIndicator" Text="DOWN" Foreground="Gray"/>
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Margin="0,4">
-                <TextBlock Text="Extra Buttons" Style="{StaticResource SliderLabel}"/>
-                <TextBlock x:Name="Btn1Indicator" Text="B1" Margin="0,0,6,0" Foreground="Gray"/>
-                <TextBlock x:Name="Btn2Indicator" Text="B2" Margin="0,0,6,0" Foreground="Gray"/>
-                <TextBlock x:Name="Btn3Indicator" Text="B3" Margin="0,0,6,0" Foreground="Gray"/>
-                <TextBlock x:Name="Btn4Indicator" Text="B4" Margin="0,0,6,0" Foreground="Gray"/>
-                <TextBlock x:Name="Btn5Indicator" Text="B5" Foreground="Gray"/>
-            </StackPanel>
-
-            <!-- Options -->
-            <TextBlock Text="Options" Style="{StaticResource SectionHeader}"/>
-            <StackPanel Orientation="Horizontal" Margin="0,4">
-                <TextBlock Text="Auto-apply profile on launch" Style="{StaticResource SliderLabel}"/>
-                <CheckBox x:Name="AutoApplyToggle" Checked="AutoApplyToggle_Changed" Unchecked="AutoApplyToggle_Changed"/>
-            </StackPanel>
-            <Button Content="Clear All Settings" Width="150" HorizontalAlignment="Left"
-                    Margin="0,10,0,0" Click="ClearSettings_Click"/>
+                    <!-- Configuration -->
+                    <TextBlock Text="Configuration" Style="{StaticResource SectionHeader}"/>
+                    <CheckBox x:Name="ModeChimeToggle" Content="Chime when sequential mode changes" Margin="0,4"
+                              Checked="ModeChimeToggle_Changed" Unchecked="ModeChimeToggle_Changed"/>
+                    <CheckBox x:Name="Combo1Toggle" Content="Select extra gears with pull ring" Margin="0,4"
+                              Checked="Combo1Toggle_Changed" Unchecked="Combo1Toggle_Changed"/>
+                    <CheckBox x:Name="Combo2Toggle" Content="Select extra gears with expansion buttons" Margin="0,4"
+                              Checked="Combo2Toggle_Changed" Unchecked="Combo2Toggle_Changed"/>
+                    <CheckBox x:Name="PullBtnToggle" Content="Pull Ring Button Visible" Margin="0,4"
+                              Checked="PullBtnToggle_Changed" Unchecked="PullBtnToggle_Changed"/>
+                </StackPanel>
+            </Grid>
 
         </StackPanel>
     </ScrollViewer>

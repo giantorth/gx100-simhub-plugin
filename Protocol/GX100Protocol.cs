@@ -15,6 +15,16 @@ namespace GX100Plugin.Protocol
         // report per read, so a read asks for exactly one report's worth.
         public const int InputReportLength = 16;
 
+        // Hall-sensor readings: six 12-bit values, big-endian, in bytes 3-14
+        // (bytes 2 and 15 read zero). Sensor N sits under gear slot N; the middle
+        // pair (3 and 4) is also what the sequential lever moves over. Layout per
+        // the jacketus WebHID configurator, confirmed against hidraw captures —
+        // the high bytes hold steady while the low bytes jitter, and the sensor
+        // under an engaged gear reads well above the rest.
+        public const int SensorOffset = 3;
+        public const int SensorCount = 6;
+        public const int SensorMax = 0x0FFF;
+
         // Report type bytes (first byte of output report)
         public const byte ReportCalibration = 0x01;
         public const byte ReportConfig = 0x02;

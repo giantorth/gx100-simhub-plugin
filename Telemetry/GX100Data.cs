@@ -1,3 +1,5 @@
+using System.Threading;
+
 namespace GX100Plugin.Telemetry
 {
     public class GX100Data
@@ -23,6 +25,21 @@ namespace GX100Plugin.Telemetry
         public volatile bool Button4;
         public volatile bool Button5;
         public volatile ushort RawButtons;
+
+        // Hall-sensor readings, index 0-5 for sensors 1-6. Written by the HID
+        // reader thread, read by the UI and SimHub properties.
+        private readonly int[] _sensors = new int[Protocol.GX100Protocol.SensorCount];
+
+        public int GetSensor(int index) => Volatile.Read(ref _sensors[index]);
+
+        public void UpdateSensors(int[] values)
+        {
+            int n = System.Math.Min(values.Length, _sensors.Length);
+            for (int i = 0; i < n; i++)
+                Volatile.Write(ref _sensors[i], values[i]);
+        }
+
+        public bool IsPressed(int bit) => (RawButtons & (1 << bit)) != 0;
 
         // Calibration
         public volatile bool IsHCalibrating;

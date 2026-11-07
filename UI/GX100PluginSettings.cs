@@ -3,7 +3,13 @@ namespace GX100Plugin
     public class GX100PluginSettings
     {
         public bool ConnectionEnabled { get; set; } = true;
-        public bool AutoApplyProfileOnLaunch { get; set; } = true;
+
+        // Display preference for the status panel, not device configuration, so it
+        // lives here rather than in profiles.
+        public bool ShowSensorReadings { get; set; } = true;
+
+        // Likewise a user preference: whether to chime when sequential mode toggles.
+        public bool ModeChimeEnabled { get; set; } = true;
 
         public int HSensitivity { get; set; } = GX100Defaults.HSensitivity;
         public int SeqSensitivity { get; set; } = GX100Defaults.SeqSensitivity;
