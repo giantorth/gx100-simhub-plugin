@@ -1,0 +1,67 @@
+name: Build
+
+# Compile check for every push to main and every PR. The DLL is uploaded as a
+# workflow artifact (not a release) so a build can be tested before tagging.
+# Releases are cut by pushing a v* tag — see release.yml.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**.cs"
+      - "**.csproj"
+      - "**.sln"
+      - "**.xaml"
+      - "libs/**"
+      - ".github/workflows/build.yml"
+  pull_request:
+    paths:
+      - "**.cs"
+      - "**.csproj"
+      - "**.sln"
+      - "**.xaml"
+      - "libs/**"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Compute build version
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' GX100Plugin.csproj | head -n1)
+          short_sha=${GITHUB_SHA::7}
+          echo "version=${base}-ci.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build plugin DLL
+        run: dotnet build -c Release --no-restore "/p:Version=${{ steps.vars.outputs.version }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: GX100Plugin-${{ steps.vars.outputs.short_sha }}
+          path: bin/x86/Release/GX100Plugin.dll
+          if-no-files-found: error

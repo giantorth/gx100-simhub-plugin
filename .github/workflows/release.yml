@@ -1,0 +1,84 @@
+name: Release
+
+# Push a tag to publish a release:
+#
+#   git tag v0.2.0 && git push origin v0.2.0
+#
+# The tag (minus the leading "v") becomes the assembly version. A tag with a
+# pre-release suffix (v0.2.0-beta.1) is published as a GitHub pre-release.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  ReleaseZip: GX100Plugin_${{ github.ref_name }}.zip
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build plugin DLL
+        run: dotnet build -c Release --no-restore "/p:Version=${{ steps.version.outputs.version }}"
+
+      - name: Stage release files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path staging -Force | Out-Null
+          Copy-Item ./bin/x86/Release/GX100Plugin.dll staging/
+          Copy-Item ./README.md staging/
+
+      - name: Zip release files
+        shell: pwsh
+        run: Compress-Archive -Path ./staging/* -DestinationPath ./${{ env.ReleaseZip }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-files
+          path: |
+            ${{ env.ReleaseZip }}
+            staging/GX100Plugin.dll
+          if-no-files-found: error
+
+  create-release:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: release-files
+
+      - name: Create release
+        uses: softprops/action-gh-release@v3
+        with:
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            ${{ env.ReleaseZip }}
+            staging/GX100Plugin.dll

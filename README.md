@@ -28,7 +28,9 @@ switch them automatically for each game.
 
 ## Installation
 
-1. Download `GX100Plugin.dll`, or build it yourself (see below).
+1. Download `GX100Plugin.dll` from the
+   [latest release](https://github.com/giantorth/gx100-simhub-plugin/releases/latest),
+   or build it yourself (see below).
 2. Close SimHub.
 3. Copy `GX100Plugin.dll` into your SimHub install folder (the folder that contains
    `SimHubWPF.exe`).
@@ -93,6 +95,28 @@ dotnet build -c Release -p:SIMHUB_PATH="C:\Program Files (x86)\SimHub\"
 
 The SimHub assemblies that the build references are in `libs/SimHub/`. `libs/SimHub/VERSION`
 gives the SimHub version they came from.
+
+## Releases
+
+GitHub Actions builds the plugin on Windows:
+
+- **Build** (`.github/workflows/build.yml`) runs on every push to `main` and on every
+  pull request that changes source. The DLL is attached to the run as an artifact.
+- **Release** (`.github/workflows/release.yml`) runs when you push a `v*` tag. It builds
+  the DLL with the tag as its version, then publishes a GitHub release with
+  `GX100Plugin.dll`, a zip of it, and generated release notes.
+- **SimHub deps update** (`.github/workflows/simhub-update.yml`) checks every day for a
+  new SimHub release. When there is one, it installs SimHub on a Windows runner, copies
+  the DLLs into `libs/SimHub/`, checks that the plugin still builds, and opens a PR.
+
+To make a release:
+
+```sh
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+A tag with a suffix such as `v0.2.0-beta.1` is published as a pre-release.
 
 ## Project layout
 
